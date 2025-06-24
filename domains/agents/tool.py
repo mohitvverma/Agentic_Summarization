@@ -27,6 +27,7 @@ from domains.workflows.prompt import initialize_entity_extraction_prompt, initia
 from domains.doc_loader.routes import file_loader
 from domains.workflows.utils import (
     create_result_dict,
+    extract_summary_text,
     get_attribute
 )
 
@@ -261,6 +262,16 @@ async def summarize_document(state: OrchestratorState):
 
 
 async def extract_entities(documents: List[Document], entity_types: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Extract entities and other key information from documents.
+
+    Args:
+        documents: List of Document objects to analyze
+        entity_types: Optional list of specific entity types to extract
+
+    Returns:
+        Dictionary containing extracted entities and metadata
+    """
     llm = initialize_chat_model(temperature=0.0)  # Use zero temperature for factual extraction
 
     if not entity_types:

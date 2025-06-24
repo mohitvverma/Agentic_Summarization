@@ -10,14 +10,19 @@ from domains.workflows.generator import run_orchestrator_graph
 
 async def document_summarize_orchestrator(
     file_paths: Union[str, List[str]],
+    image_paths: Union[str, List[str]] = None,
     extract_entities: bool = True,
-    token_max: int = 1000
+    token_max: int = 1000,
+    instructions: str = None,
+    use_agent: bool = True
 ) -> Dict[str, Any]:
     try:
         result = await run_orchestrator_graph(
             file_paths=file_paths,
             extract_entities=extract_entities,
-            token_max=token_max
+            token_max=token_max,
+            instructions=instructions,
+            use_agent=use_agent
         )
 
         if isinstance(result, dict):
