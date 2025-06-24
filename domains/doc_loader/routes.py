@@ -128,4 +128,9 @@ def file_loader(
 
     parsed_documents = split_text(documents)
 
+    if original_file_name or file_name is not None and original_file_name != file_name :
+        for doc in parsed_documents:
+            doc.metadata["original_file_name"] = original_file_name
+            doc.metadata["file_name"] = file_name
+
     return parsed_documents
