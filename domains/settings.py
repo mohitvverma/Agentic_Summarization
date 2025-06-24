@@ -46,12 +46,16 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = os.environ.get("CHUNK_SIZE", 1000)
     CHUNK_OVERLAP: int = os.environ.get("CHUNK_OVERLAP", 100)
 
-    # PDF processing settings
     RESOLUTION: int = os.environ.get("RESOLUTION", 300)
     PDF_CHUNK_SIZE: int = os.environ.get("PDF_CHUNK_SIZE", 5)
 
     LLM_SERVICE_TYPE: str = os.environ.get(
         "LLM_SERVICE_TYPE", LLMServiceEnum.OPENAI.value
+    )
+
+    SUPPORTED_FILE_TYPES: list[str] = os.environ.get(
+        "SUPPORTED_FILE_TYPES",
+        ['jpg','png','jpeg','gif','webp', 'jpg', 'pdf']
     )
 
     LLMS: ClassVar[dict] = {
@@ -67,6 +71,7 @@ class Settings(BaseSettings):
         "LANGUAGE_DETECTION_MODEL": os.environ.get("LANGUAGE_DETECTION_MODEL", "gpt-4o-mini"),
         "CHAT_STREAMING_MODEL": os.environ.get("CHAT_STREAMING_MODEL", "gpt-4o"),
         "RAG_LLM_MODEL": os.environ.get("RAG_LLM_MODEL", "gpt-4o-mini"),
+        "REASONING_MODEL": os.environ.get("REASONING_MODEL", "gpt-o3"),
     }
 
     GEMINI_LLMS: ClassVar[dict] = {

@@ -9,6 +9,11 @@ class FileLoaderException(Exception):
     pass
 
 
+class ImageProcessingError(Exception):
+    """Custom exception for image processing errors."""
+    pass
+
+
 def split_text(
         text: list[Document],
         chunk_size: int = config_settings.CHUNK_SIZE,
