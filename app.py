@@ -7,6 +7,9 @@ from tempfile import NamedTemporaryFile
 from domains.doc_loader.routes import file_loader
 from domains.workflows.routes import document_summarize_orchestrator
 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 st.set_page_config(
     page_title="Agentic Document Intelligence System",
@@ -128,17 +131,17 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     extract_entities = st.checkbox(
-        "Extract Entities", 
-        value=True, 
+        "Extract Entities",
+        value=True,
         help="Extract people, organizations, dates, and relationships from the document"
     )
 
     token_max = st.slider(
-        "Max Tokens per Chunk", 
-        min_value=500, 
-        max_value=4000, 
-        value=1000, 
-        step=100, 
+        "Max Tokens per Chunk",
+        min_value=500,
+        max_value=4000,
+        value=1000,
+        step=100,
         help="Maximum tokens for each summary chunk. Higher values may produce more detailed summaries but take longer to process."
     )
 
@@ -162,8 +165,8 @@ with tab1:
     st.markdown("<p>Supported formats: PDF, DOCX, TXT, CSV, XLSX</p>", unsafe_allow_html=True)
 
     uploaded_files = st.file_uploader(
-        "Drag and drop files here", 
-        accept_multiple_files=True, 
+        "Drag and drop files here",
+        accept_multiple_files=True,
         type=["pdf", "docx", "txt", "csv", "xlsx"]
     )
 
@@ -214,47 +217,22 @@ if uploaded_files:
                     with st.expander(f"Results for {filename}", expanded=True):
                         st.markdown("<div class='result-container'>", unsafe_allow_html=True)
 
-                        st.markdown("<h3>Summary</h3>", unsafe_allow_html=True)
+                        # Display only summary and entities as per requirement
                         if result.get("status") == "success" and result.get("summary"):
+                            st.markdown("<h3>Summary</h3>", unsafe_allow_html=True)
                             st.markdown(result["summary"])
                         else:
                             st.warning("No summary generated or processing failed.")
 
-                        if extract_entities and result.get("entities") and isinstance(result["entities"], dict) and result["entities"].get("status") == "success":
+                        if extract_entities and result.get("entities") and isinstance(result["entities"], dict):
                             st.markdown("<h3>Extracted Entities</h3>", unsafe_allow_html=True)
 
+                            # Display the entities in a more compact format
                             if result["entities"].get("entities"):
-                                st.markdown("<h4>People & Organizations</h4>", unsafe_allow_html=True)
-
-                                people_orgs = [e for e in result["entities"]["entities"] 
-                                              if e.get("type") in ["person", "people", "organization", "organizations"]]
-
-                                if people_orgs:
-                                    cols = st.columns(3)
-                                    for i, entity in enumerate(people_orgs):
-                                        with cols[i % 3]:
-                                            st.markdown(f"<div class='entity-box'><strong>{entity.get('name', 'Unknown')}</strong><br>{entity.get('type', 'Unknown')}</div>", unsafe_allow_html=True)
-                                else:
-                                    st.info("No people or organizations found.")
-
-                            if result["entities"].get("dates"):
-                                st.markdown("<h4>Key Dates</h4>", unsafe_allow_html=True)
-                                for date in result["entities"]["dates"]:
-                                    st.markdown(f"**{date.get('date', 'Unknown date')}**: {date.get('context', '')}")
-
-                            if result["entities"].get("key_topics"):
-                                st.markdown("<h4>Key Topics</h4>", unsafe_allow_html=True)
-                                st.write(", ".join(result["entities"]["key_topics"]))
-
-                            if result["entities"].get("sentiment"):
-                                st.markdown("<h4>Document Sentiment</h4>", unsafe_allow_html=True)
-                                sentiment = result["entities"]["sentiment"]
-                                if isinstance(sentiment, dict) and "polarity" in sentiment:
-                                    st.markdown(f"**Polarity**: {sentiment['polarity']}")
-                                    if "explanation" in sentiment:
-                                        st.markdown(f"**Explanation**: {sentiment['explanation']}")
-                                else:
-                                    st.json(sentiment)
+                                cols = st.columns(3)
+                                for i, entity in enumerate(result["entities"]["entities"]):
+                                    with cols[i % 3]:
+                                        st.markdown(f"<div class='entity-box'><strong>{entity.get('name', 'Unknown')}</strong><br>{entity.get('type', 'Unknown')}</div>", unsafe_allow_html=True)
 
                         st.markdown("</div>", unsafe_allow_html=True)
 else:

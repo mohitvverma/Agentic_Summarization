@@ -1,6 +1,6 @@
 import operator
 import json
-from typing import List, Literal, Dict, Any, Optional, Union, cast
+from typing import List, Literal, Dict, Any, Optional, Union, cast, TypeVar, Generic
 
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,26 +16,63 @@ from pathlib import Path
 
 from domains.utils import initialize_chat_model
 from domains.workflows.models import (
-    SummaryOutput, 
-    SummaryState, 
-    OverallSummaryState,
+    SummaryOutput,
+    SummaryState,
     DocumentInfo,
     OrchestratorState,
-    OverallState
+    OverallState,
+    EntityExtraction
 )
 from domains.workflows.prompt import initialize_entity_extraction_prompt, initialize_summary_prompt
 from domains.doc_loader.routes import file_loader
 
+# Helper functions to improve code reusability
+T = TypeVar('T')
+
+
+def get_attribute(obj: Any, attr_name: str, default: Optional[T] = None) -> T:
+    if hasattr(obj, attr_name):
+        return getattr(obj, attr_name)
+    elif isinstance(obj, dict) and attr_name in obj:
+        return obj[attr_name]
+    return default
+
+
+def extract_summary_text(summary: Any) -> str:
+    if isinstance(summary, str):
+        return summary
+    elif hasattr(summary, "summary"):
+        return summary.summary
+    elif isinstance(summary, dict) and "summary" in summary:
+        return summary["summary"]
+    else:
+        return str(summary)
+
+
+def create_result_dict(file_path: str, file_type: str, status: str = "success",
+                      summary: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
+                      entities: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    result = {
+        "file_path": file_path,
+        "file_type": file_type,
+        "status": status
+    }
+
+    if summary:
+        result["summary"] = summary
+
+    if metadata:
+        result["metadata"] = metadata
+    else:
+        result["metadata"] = {}
+
+    if entities:
+        result["entities"] = entities
+
+    return result
+
+
 def create_summarization_graph(token_max: int = 1000):
-    """
-    Create a graph for summarizing documents using a map-reduce approach.
-
-    Args:
-        token_max: Maximum number of tokens for each summary chunk
-
-    Returns:
-        A compiled StateGraph for document summarization
-    """
     llm = initialize_chat_model()
 
     map_prompt = ChatPromptTemplate.from_messages(
@@ -56,36 +93,24 @@ def create_summarization_graph(token_max: int = 1000):
         return sum(llm.get_num_tokens(doc.page_content) for doc in documents)
 
     async def generate_summary(state: SummaryState):
-        if hasattr(state, "content"):
-            content = state.content
-        else:
-            content = state["content"]
+        content = get_attribute(state, "content", "")
         response = await map_chain.ainvoke({"context": content})
         return {"summaries": [response]}
 
     def map_summaries(state: OverallState):
-        if hasattr(state, "contents"):
-            contents = state.contents
-        else:
-            contents = state["contents"]
+        contents = get_attribute(state, "contents", [])
         return [
             Send("generate_summary", {"content": content}) for content in contents
         ]
 
     def collect_summaries(state: OverallState):
-        if hasattr(state, "summaries"):
-            summaries = state.summaries
-        else:
-            summaries = state["summaries"]
+        summaries = get_attribute(state, "summaries", [])
         return {
             "collapsed_summaries": [Document(page_content=summary) for summary in summaries]
         }
 
     async def collapse_summaries(state: OverallState):
-        if hasattr(state, "collapsed_summaries"):
-            collapsed_summaries = state.collapsed_summaries
-        else:
-            collapsed_summaries = state["collapsed_summaries"]
+        collapsed_summaries = get_attribute(state, "collapsed_summaries", [])
         doc_lists = split_list_of_docs(
             collapsed_summaries, length_function, token_max
         )
@@ -98,10 +123,7 @@ def create_summarization_graph(token_max: int = 1000):
     def should_collapse(
         state: OverallState,
     ) -> Literal["collapse_summaries", "generate_final_summary"]:
-        if hasattr(state, "collapsed_summaries"):
-            collapsed_summaries = state.collapsed_summaries
-        else:
-            collapsed_summaries = state["collapsed_summaries"]
+        collapsed_summaries = get_attribute(state, "collapsed_summaries", [])
         num_tokens = length_function(collapsed_summaries)
         if num_tokens > token_max:
             return "collapse_summaries"
@@ -109,11 +131,7 @@ def create_summarization_graph(token_max: int = 1000):
             return "generate_final_summary"
 
     async def generate_final_summary(state: OverallState):
-        if hasattr(state, "collapsed_summaries"):
-            collapsed_summaries = state.collapsed_summaries
-        else:
-            collapsed_summaries = state["collapsed_summaries"]
-
+        collapsed_summaries = get_attribute(state, "collapsed_summaries", [])
         docs_text = "\n\n".join([doc.page_content for doc in collapsed_summaries])
         response = await reduce_chain.ainvoke({"docs": docs_text})
         return {"final_summary": response}
@@ -167,25 +185,32 @@ def create_orchestrator_graph():
 
     async def extract_document_entities(state: OrchestratorState):
         try:
-            if state.status == "error":
+            if get_attribute(state, "status") == "error":
                 return {}
 
             current_doc = state.documents[state.current_document_index]
-            if not current_doc.content:
+            if not get_attribute(current_doc, "content"):
                 return {"error": "No document content to extract entities from", "status": "error"}
 
             entities_result = await extract_entities(current_doc.content)
 
-            result = {
-                "file_path": current_doc.file_path,
-                "file_type": current_doc.file_type,
-                "status": "processing",
-                "entities": entities_result
-            }
+            result = create_result_dict(
+                file_path=current_doc.file_path,
+                file_type=current_doc.file_type,
+                status="processing",
+                entities={
+                    "status": get_attribute(entities_result, "status", "success"),
+                    "entities": get_attribute(entities_result, "entities", []),
+                    "dates": get_attribute(entities_result, "dates", []),
+                    "key_topics": get_attribute(entities_result, "key_topics", []),
+                    "sentiment": get_attribute(entities_result, "sentiment", {}),
+                    "relationships": get_attribute(entities_result, "relationships", [])
+                }
+            )
 
-            updated_results = state.results.copy()
+            updated_results = get_attribute(state, "results", []).copy() if get_attribute(state, "results") else []
             if state.current_document_index < len(updated_results):
-                updated_results[state.current_document_index] = result
+                updated_results[state.current_document_index].update(result)
             else:
                 updated_results.append(result)
 
@@ -196,65 +221,47 @@ def create_orchestrator_graph():
 
     async def summarize_document(state: OrchestratorState):
         try:
-            logger.debug(f"Starting summarize_document with state type: {type(state)}")
-            logger.debug(f"State status: {state.status}")
-            logger.debug(f"State results: {state.results}")
-            logger.debug(f"State results type: {type(state.results)}")
-            logger.debug(f"State results length: {len(state.results)}")
-
-            if state.status == "error":
+            if get_attribute(state, "status") == "error":
                 return {}
 
             current_doc = state.documents[state.current_document_index]
-            if not current_doc.content:
+            if not get_attribute(current_doc, "content"):
                 return {"error": "No document content to summarize", "status": "error"}
 
             contents = [doc.page_content for doc in current_doc.content]
+            summarization_graph = create_summarization_graph(token_max=state.token_max)
+            final_state = None
 
             try:
-                summarization_graph = create_summarization_graph(token_max=state.token_max)
-
-                final_state = None
-                logger.debug("Starting summarization graph streaming")
-
+                logger.info(f"Summarizing document: {current_doc.file_path}")
                 async for step in summarization_graph.astream(
                     {"contents": contents},
                     {"recursion_limit": 10},
                 ):
-                    logger.debug(f"Received step from summarization graph: {type(step)}")
                     final_state = step
-                    logger.debug(f"Using step as final_state: {type(final_state)}")
-
-                logger.debug("Finished summarization graph streaming")
-                logger.debug(f"Processing step state type: {type(final_state)}")
-                logger.debug(f"Processing step state: {final_state}")
             except Exception as e:
                 logger.error(f"Error running summarization graph: {str(e)}")
                 return {
-                    "results": state.results,
+                    "results": get_attribute(state, "results", []),
                     "status": "error",
                     "error": f"Error running summarization graph: {str(e)}"
                 }
 
-            summary_result = {
-                "status": "error",
-                "summary": None,
-                "metadata": {
-                    "document_count": len(current_doc.content),
-                    "total_tokens": sum(initialize_chat_model().get_num_tokens(doc.page_content) for doc in current_doc.content),
-                }
+            final_summary = get_attribute(final_state, "final_summary")
+
+            metadata = {
+                "document_count": len(current_doc.content),
+                "total_tokens": sum(initialize_chat_model().get_num_tokens(doc.page_content) for doc in current_doc.content),
             }
 
-            final_summary = None
-            if hasattr(final_state, "final_summary"):
-                final_summary = final_state.final_summary
-            elif isinstance(final_state, dict) and "final_summary" in final_state:
-                final_summary = final_state["final_summary"]
+            summary_result = create_result_dict(
+                file_path=current_doc.file_path,
+                file_type=current_doc.file_type,
+                status="success",
+                metadata=metadata
+            )
 
             if final_summary is not None:
-                logger.debug(f"Final summary type: {type(final_summary)}")
-                logger.debug(f"Final summary: {final_summary}")
-
                 if isinstance(final_summary, str):
                     summary_result["summary"] = final_summary
                     summary_result["summary_json"] = {"summary": final_summary}
@@ -271,50 +278,21 @@ def create_orchestrator_graph():
                     if "metadata" in final_summary:
                         summary_result["metadata"].update(final_summary["metadata"])
                     summary_result["summary_json"] = final_summary
-                else:
-                    # Fallback to string representation
-                    try:
-                        summary_result["summary"] = str(final_summary)
-                        summary_result["summary_json"] = {"summary": str(final_summary)}
-                    except Exception as e:
-                        logger.error(f"Error converting summary to string: {str(e)}")
-                        summary_result["summary"] = "Error: Could not convert summary to string"
-                        summary_result["summary_json"] = {"summary": "Error: Could not convert summary to string"}
-
-                summary_result["status"] = "success"
             else:
                 summary_result["status"] = "error"
                 summary_result["error"] = "No final summary generated"
+                return {
+                    "results": get_attribute(state, "results", []),
+                    "status": "error",
+                    "error": "No final summary generated"
+                }
 
-            # Update the result for this document
-            updated_results = state.results.copy()
+            updated_results = get_attribute(state, "results", []).copy() if get_attribute(state, "results") else []
             if state.current_document_index < len(updated_results):
                 current_result = updated_results[state.current_document_index]
-                current_result.update({
-                    "status": summary_result["status"],
-                    "summary": summary_result.get("summary"),
-                    "metadata": summary_result.get("metadata", {}),
-                })
-
-                if "summary_json" in summary_result:
-                    current_result["summary_json"] = summary_result["summary_json"]
-                if "key_points" in summary_result:
-                    current_result["key_points"] = summary_result["key_points"]
-                if "topics" in summary_result:
-                    current_result["topics"] = summary_result["topics"]
-
-                updated_results[state.current_document_index] = current_result
+                current_result.update(summary_result)
             else:
-                updated_results.append({
-                    "file_path": current_doc.file_path,
-                    "file_type": current_doc.file_type,
-                    "status": summary_result["status"],
-                    "summary": summary_result.get("summary"),
-                    "metadata": summary_result.get("metadata", {}),
-                    "summary_json": summary_result.get("summary_json"),
-                    "key_points": summary_result.get("key_points", []),
-                    "topics": summary_result.get("topics", [])
-                })
+                updated_results.append(summary_result)
 
             return {"results": updated_results, "status": "document_summarized"}
         except Exception as e:
@@ -322,27 +300,41 @@ def create_orchestrator_graph():
             return {"error": str(e), "status": "error"}
 
     def next_document(state: OrchestratorState):
-        return {"current_document_index": state.current_document_index + 1}
+        """
+        Increment the document index and preserve the results.
+        """
+        return {
+            "current_document_index": state.current_document_index + 1,
+            "results": get_attribute(state, "results", [])
+        }
 
     def decide_next_action(state: OrchestratorState) -> Literal["extract_document_entities", "summarize_document", "next_document", "end"]:
-        if state.status == "error":
+        """
+        Determine the next action based on the current state.
+        """
+        status = get_attribute(state, "status")
+
+        if status == "error":
             return "end"
 
-        if state.status == "document_loaded":
-            if state.extract_entities:
+        if status == "document_loaded":
+            if get_attribute(state, "extract_entities", True):
                 return "extract_document_entities"
             else:
                 return "summarize_document"
-        elif state.status == "entities_extracted":
+        elif status == "entities_extracted":
             return "summarize_document"
-        elif state.status == "document_summarized":
+        elif status == "document_summarized":
             return "next_document"
-        elif state.status == "completed":
+        elif status == "completed":
             return "end"
         else:
             return "end"
 
     def check_more_documents(state: OrchestratorState) -> Literal["load_document", "end"]:
+        """
+        Check if there are more documents to process.
+        """
         if state.current_document_index < len(state.documents):
             return "load_document"
         else:
@@ -407,30 +399,18 @@ async def run_summarization_graph(documents: List[Document], token_max: int = 10
         document_contents = [doc.page_content for doc in documents]
         final_state = None
 
-        # Run the graph with the document contents
         async for step in summarization_graph.astream(
             {"contents": document_contents},
             {"recursion_limit": 10},
         ):
             final_state = step
-            if isinstance(step, dict):
-                logger.debug(f"Processing step: {list(step.keys())}")
-            else:
-                logger.debug(f"Processing step of type: {type(step)}")
 
         # Process the final state to extract the summary
         if final_state:
-            # Check if final_state has final_summary attribute or key
-            final_summary = None
-            if hasattr(final_state, "final_summary"):
-                final_summary = final_state.final_summary
-            elif isinstance(final_state, dict) and "final_summary" in final_state:
-                final_summary = final_state["final_summary"]
+            # Get the final summary from the state
+            final_summary = get_attribute(final_state, "final_summary")
 
             if final_summary is not None:
-                logger.debug(f"Final summary type: {type(final_summary)}")
-                logger.debug(f"Final summary: {final_summary}")
-
                 # Store the summary in the result
                 if isinstance(final_summary, str):
                     result["summary"] = final_summary
@@ -483,17 +463,12 @@ async def extract_entities(documents: List[Document], entity_types: Optional[Lis
 
     if not entity_types:
         entity_types = [
-            "people", "organizations", "locations", "dates", "events", 
+            "people", "organizations", "locations", "dates", "events",
             "products", "key_metrics", "technical_terms"
         ]
 
     extraction_prompt = initialize_entity_extraction_prompt()
-
-    try:
-        extraction_chain = extraction_prompt | llm | JsonOutputParser()
-    except Exception as e:
-        logger.warning(f"Error creating JsonOutputParser with EntityExtraction: {str(e)}")
-        extraction_chain = extraction_prompt | llm | JsonOutputParser()
+    extraction_chain = extraction_prompt | llm | JsonOutputParser()
 
     result = {
         "status": "processing",
@@ -513,13 +488,10 @@ async def extract_entities(documents: List[Document], entity_types: Optional[Lis
 
         for i, doc in enumerate(documents):
             try:
-                logger.debug(f"Extracting entities from document chunk {i+1}/{len(documents)}")
+                logger.info(f"Extracting entities from document chunk {i+1}/{len(documents)}")
                 extraction = await extraction_chain.ainvoke({"text": doc.page_content})
-                logger.debug(f"Extracting entities: {extraction}")
-                logger.debug(f"Extraction type: {type(extraction)}")
 
                 if isinstance(extraction, dict):
-                    from domains.workflows.models import EntityExtraction
                     extraction = EntityExtraction(
                         entities=extraction.get("entities", []),
                         dates=extraction.get("dates", []),
@@ -539,57 +511,45 @@ async def extract_entities(documents: List[Document], entity_types: Optional[Lis
             topics = set()
             relationship_map = {}
 
+            # Process all extractions to consolidate entities
             for extraction in all_extractions:
-                if isinstance(extraction, EntityExtraction):
-                    # Process entities
-                    for entity in extraction.entities:
-                        if "name" in entity and "type" in entity:
-                            key = f"{entity['name']}_{entity['type']}"
-                            entity_map[key] = entity
+                # Standardize extraction handling regardless of type
+                entities = get_attribute(extraction, "entities", [])
+                dates = get_attribute(extraction, "dates", [])
+                key_topics = get_attribute(extraction, "key_topics", [])
+                sentiment = get_attribute(extraction, "sentiment", {})
+                relationships = get_attribute(extraction, "relationships", [])
 
-                    for date in extraction.dates:
-                        if "date" in date:
-                            key = date["date"]
-                            date_map[key] = date
+                # Process entities
+                for entity in entities:
+                    if "name" in entity and "type" in entity:
+                        key = f"{entity['name']}_{entity['type']}"
+                        entity_map[key] = entity
 
-                    topics.update(extraction.key_topics)
+                # Process dates
+                for date in dates:
+                    if "date" in date:
+                        key = date["date"]
+                        date_map[key] = date
 
-                    if extraction.sentiment and len(extraction.sentiment) > len(result["sentiment"]):
-                        result["sentiment"] = extraction.sentiment
+                # Process topics
+                topics.update(key_topics)
 
-                    for rel in extraction.relationships:
-                        if "source" in rel and "target" in rel and "type" in rel:
-                            key = f"{rel['source']}_{rel['type']}_{rel['target']}"
-                            relationship_map[key] = rel
+                # Process sentiment
+                if sentiment and len(sentiment) > len(result["sentiment"]):
+                    result["sentiment"] = sentiment
 
-                elif isinstance(extraction, dict):
-                    # Process entities
-                    for entity in extraction.get("entities", []):
-                        if "name" in entity and "type" in entity:
-                            key = f"{entity['name']}_{entity['type']}"
-                            entity_map[key] = entity
+                # Process relationships
+                for rel in relationships:
+                    if "source" in rel and "target" in rel and "type" in rel:
+                        key = f"{rel['source']}_{rel['type']}_{rel['target']}"
+                        relationship_map[key] = rel
 
-                    for date in extraction.get("dates", []):
-                        if "date" in date:
-                            key = date["date"]
-                            date_map[key] = date
-
-                    topics.update(extraction.get("key_topics", []))
-
-                    sentiment = extraction.get("sentiment", {})
-                    if sentiment and len(sentiment) > len(result["sentiment"]):
-                        result["sentiment"] = sentiment
-
-                    for rel in extraction.get("relationships", []):
-                        if "source" in rel and "target" in rel and "type" in rel:
-                            key = f"{rel['source']}_{rel['type']}_{rel['target']}"
-                            relationship_map[key] = rel
-
+            # Update result with consolidated data
             result["entities"] = list(entity_map.values())
             result["dates"] = list(date_map.values())
             result["key_topics"] = list(topics)
             result["relationships"] = list(relationship_map.values())
-
             result["status"] = "success"
         else:
             result["status"] = "error"
@@ -614,6 +574,7 @@ async def summarize_content(documents: List[Document], token_max: int = 1000) ->
     Returns:
         Dictionary containing the final summary and metadata
     """
+    logger.info(f"Summarizing {len(documents)} document(s)")
     return await run_summarization_graph(documents, token_max)
 
 
@@ -622,17 +583,6 @@ async def run_orchestrator_graph(
     extract_entities: bool = True,
     token_max: int = 1000
 ) -> Dict[str, Any]:
-    """
-    Run the orchestrator graph to process documents.
-
-    Args:
-        file_paths: Single file path or list of file paths to process
-        extract_entities: Whether to extract entities from documents
-        token_max: Maximum tokens for summarization chunks
-
-    Returns:
-        Dictionary with processing results
-    """
     try:
         if isinstance(file_paths, str):
             file_paths = [file_paths]
@@ -652,6 +602,7 @@ async def run_orchestrator_graph(
                 original_file_name=original_file_name
             ))
 
+        # Initialize state and graph
         initial_state = OrchestratorState(
             documents=documents,
             extract_entities=extract_entities,
@@ -660,47 +611,140 @@ async def run_orchestrator_graph(
 
         orchestrator_graph = create_orchestrator_graph()
         final_state = None
+        intermediate_results = []
 
+        # Run the graph
         async for step in orchestrator_graph.astream(
             initial_state.dict(),
             {"recursion_limit": 20},
         ):
             final_state = step
 
-        # Process the results
-        logger.debug(f"Final state: {final_state}")
-        if final_state and final_state.get("status") != "error":
-            results = final_state.get("results", [])
-            logger.debug(f"Results from final state: {results}")
-            logger.debug(f"Results type: {type(results)}")
-            logger.debug(f"Results length: {len(results)}")
+            # Capture results at each step
+            results = get_attribute(step, "results", [])
+            if results:
+                intermediate_results = results
 
-            if len(results) == 0 and final_state.get("summary"):
-                logger.debug(f"Creating result from summary: {final_state.get('summary')}")
-                results = [{
-                    "file_path": file_paths[0] if isinstance(file_paths, list) else file_paths,
-                    "file_type": str(Path(file_paths[0] if isinstance(file_paths, list) else file_paths).suffix.lower().replace('.', '')),
-                    "status": "success",
-                    "summary": final_state.get("summary"),
-                    "metadata": final_state.get("metadata", {})
-                }]
-                logger.debug(f"Created results: {results}")
+        # Process results
+        if final_state and get_attribute(final_state, "status") != "error":
+            # Get results from final state
+            results = []
+
+            # Check if results are in the nested 'next_document' structure
+            next_document = get_attribute(final_state, "next_document", {})
+            if isinstance(next_document, dict) and "results" in next_document:
+                results = next_document["results"]
+            else:
+                results = get_attribute(final_state, "results", [])
+
+            logger.info(f"Processing completed with {len(results)} result(s)")
+
+            # Use intermediate results if final results are empty
+            if len(results) == 0 and intermediate_results:
+                results = intermediate_results
+
+            # Create result from summary if results are still empty
+            if len(results) == 0:
+                # Get file path and type for result
+                file_path = file_paths[0] if isinstance(file_paths, list) else file_paths
+                file_type = str(Path(file_path).suffix.lower().replace('.', ''))
+
+                # Try to get summary from final state
+                if get_attribute(final_state, "summary"):
+                    summary = get_attribute(final_state, "summary")
+                    metadata = get_attribute(final_state, "metadata", {})
+                    entities = get_attribute(final_state, "entities")
+
+                    result = create_result_dict(
+                        file_path=file_path,
+                        file_type=file_type,
+                        summary=summary,
+                        metadata=metadata,
+                        entities=entities
+                    )
+                    results = [result]
+
+                elif get_attribute(final_state, "final_summary"):
+                    summary = get_attribute(final_state, "final_summary")
+                    summary_text = extract_summary_text(summary)
+                    metadata = get_attribute(final_state, "metadata", {})
+                    entities = get_attribute(final_state, "entities")
+
+                    result = create_result_dict(
+                        file_path=file_path,
+                        file_type=file_type,
+                        summary=summary_text,
+                        metadata=metadata,
+                        entities=entities
+                    )
+                    results = [result]
+
+                # Try to get content from documents
+                elif hasattr(final_state, "documents"):
+                    for doc in get_attribute(final_state, "documents", []):
+                        content = get_attribute(doc, "content", [])
+                        if content and len(content) > 0:
+                            result = create_result_dict(
+                                file_path=get_attribute(doc, "file_path", file_path),
+                                file_type=get_attribute(doc, "file_type", file_type),
+                                summary="Document processed successfully",
+                                metadata={"document_count": len(content)},
+                                entities=get_attribute(final_state, "entities")
+                            )
+                            results = [result]
+                            break
+
+                # Create default result if still no results
+                if len(results) == 0:
+                    logger.warning("Could not find any summary or document content in final state")
+
+                    result = create_result_dict(
+                        file_path=file_path,
+                        file_type=file_type,
+                        summary="Document processed successfully, but no summary was generated"
+                    )
+
+                    for intermediate_result in intermediate_results:
+                        if isinstance(intermediate_result, dict) and intermediate_result.get("summary"):
+                            result["summary"] = intermediate_result.get("summary")
+
+                            # Copy additional fields if available
+                            for field in ["summary_json", "key_points", "topics"]:
+                                if intermediate_result.get(field):
+                                    result[field] = intermediate_result.get(field)
+
+                            if intermediate_result.get("metadata"):
+                                result["metadata"].update(intermediate_result.get("metadata"))
+                            break
+
+                    entities = get_attribute(final_state, "entities")
+                    if not entities:
+                        extract_entities_result = get_attribute(final_state, "extract_document_entities", {})
+                        entities = get_attribute(extract_entities_result, "entities")
+
+                    if not entities:
+                        for intermediate_result in intermediate_results:
+                            if isinstance(intermediate_result, dict) and intermediate_result.get("entities"):
+                                entities = intermediate_result.get("entities")
+                                break
+
+                    if entities:
+                        result["entities"] = entities
+
+                    results = [result]
 
             if len(results) == 1:
-                logger.debug(f"Returning single result: {results[0]}")
                 return results[0]
             else:
-                response = {
+                return {
                     "status": "success",
                     "results": results,
                     "count": len(results)
                 }
-                logger.debug(f"Returning multiple results: {response}")
-                return response
         else:
             return {
                 "status": "error",
-                "message": final_state.get("error", "Unknown error in orchestration")
+                "message": get_attribute(final_state, "error", "Unknown error in orchestration")
             }
 
     except Exception as e:
