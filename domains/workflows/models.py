@@ -39,42 +39,19 @@ class SummaryOutput(BaseModel):
         default_factory=dict
     )
 
-class SummaryState(BaseModel):
-    """State for a single document summary task"""
-    content: str = Field(description="Content to summarize")
+
+class SummaryState(TypedDict):
+    content: str
 
 
 class OverallState(TypedDict):
-    # Notice here we use the operator.add
-    # This is because we want combine all the summaries we generate
-    # from individual nodes back into one list - this is essentially
-    # the "reduce" part
     contents: List[str]
     summaries: Annotated[list, operator.add]
     collapsed_summaries: List[Document]
     final_summary: str
 
 
-class SummaryState(TypedDict):
-    content: str
-
-
-class OverallSummaryState(BaseModel):
-    """Overall state for the summarization graph"""
-    contents: List[str] = Field(description="List of document contents to summarize")
-    summaries: Annotated[List[str], operator.add] = Field(
-        description="List of generated summaries", default_factory=list
-    )
-    collapsed_summaries: List[Dict[str, Any]] = Field(
-        description="List of collapsed summaries as Document objects", default_factory=list
-    )
-    final_summary: Optional[Union[str, Dict[str, Any], SummaryOutput]] = Field(
-        description="Final generated summary", default=None
-    )
-
-
 class DocumentInfo(BaseModel):
-    """Information about a document to process"""
     file_path: str = Field(description="Path to the document file")
     file_type: str = Field(description="Type of the document file")
     file_name: str = Field(description="Name of the document file")
@@ -85,7 +62,6 @@ class DocumentInfo(BaseModel):
 
 
 class OrchestratorState(BaseModel):
-    """State for the document processing orchestrator"""
     documents: List[DocumentInfo] = Field(
         description="List of documents to process", default_factory=list
     )
@@ -106,4 +82,7 @@ class OrchestratorState(BaseModel):
     )
     error: Optional[str] = Field(
         description="Error message if processing failed", default=None
+    )
+    images_path: Optional[Union[str, List[str]]] = Field(
+        description="Path(s) to image file(s) to process", default=None
     )
