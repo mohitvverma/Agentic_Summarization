@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
 from loguru import logger
 
-from domains.workflows.graph import run_orchestrator_graph
+from domains.workflows.tool import run_orchestrator_graph
 
 
 async def document_summarize_orchestrator(
