@@ -77,17 +77,20 @@
 #     )
 
 from typing import Dict, Any, List
-from langchain_core.prompts import PromptTemplate
+
 from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 
 
 class EntityExtractionSchema(BaseModel):
-    entities: List[Dict[str, Any]] = Field(description="List of identified entities with their types and attributes", default_factory=list)
+    entities: List[Dict[str, Any]] = Field(description="List of identified entities with their types and attributes",
+                                           default_factory=list)
     dates: List[Dict[str, Any]] = Field(description="List of extracted dates with context", default_factory=list)
     key_topics: List[str] = Field(description="Core themes or topics from the text", default_factory=list)
     sentiment: Dict[str, Any] = Field(description="Overall sentiment analysis", default_factory=dict)
-    relationships: List[Dict[str, Any]] = Field(description="Contextual relationships between entities", default_factory=list)
+    relationships: List[Dict[str, Any]] = Field(description="Contextual relationships between entities",
+                                                default_factory=list)
 
 
 class SummarySchema(BaseModel):
@@ -97,7 +100,6 @@ class SummarySchema(BaseModel):
     metadata: Dict[str, Any] = Field(description="Additional metadata about the summary", default_factory=dict)
 
 
-# Moved templates to separate constants for better maintainability
 ENTITY_EXTRACTION_TEMPLATE = """
 You are an expert in extracting structured information from unstructured text.
 Your task is to analyze the given text and identify relevant entities.
@@ -160,3 +162,8 @@ def initialize_summary_prompt() -> PromptTemplate:
         )
     except Exception as e:
         raise ValueError(f"Failed to initialize summary prompt: {str(e)}")
+
+
+if __name__ == "__main__":
+    entity_extraction_prompt = initialize_entity_extraction_prompt()
+    print(entity_extraction_prompt.format(text="This is a test text"))

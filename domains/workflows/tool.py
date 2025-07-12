@@ -1,6 +1,4 @@
-import operator
-import json
-from typing import List, Literal, Dict, Any, Optional, Union, cast, TypeVar, Generic
+from typing import List, Literal, Dict, Any, Optional, Union, TypeVar
 
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -23,7 +21,7 @@ from domains.workflows.models import (
     OverallState,
     EntityExtraction
 )
-from domains.workflows.prompt import initialize_entity_extraction_prompt, initialize_summary_prompt
+from domains.workflows.prompt import initialize_entity_extraction_prompt
 from domains.doc_loader.routes import file_loader
 
 # Helper functions to improve code reusability
@@ -300,9 +298,6 @@ def create_orchestrator_graph():
             return {"error": str(e), "status": "error"}
 
     def next_document(state: OrchestratorState):
-        """
-        Increment the document index and preserve the results.
-        """
         return {
             "current_document_index": state.current_document_index + 1,
             "results": get_attribute(state, "results", [])
